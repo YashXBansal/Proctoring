@@ -9,6 +9,9 @@ from flask_socketio import SocketIO
 from dotenv import load_dotenv
 from ultralytics import YOLO
 import mediapipe as mp
+from pymongo import MongoClient
+import uuid
+from datetime import datetime
 
 # --- Initialization & Config ---
 load_dotenv()
@@ -16,7 +19,19 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:5173"]}})
 socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173"], async_mode='eventlet')
 
+# --- NEW: Database Connection ---
+try:
+    mongo_uri = os.getenv('MONGO_URI')
+    client = MongoClient(mongo_uri)
+    db = client['proctoringDB'] # Database name
+    events_collection = db['events'] # Collection name
+    print("✅ Successfully connected to MongoDB.")
+except Exception as e:
+    print(f"❌ Error connecting to MongoDB: {e}")
+    client = None # Handle connection failure gracefully
+
 class ProctoringConfig:
+    # (Configuration remains the same as your last version)
     NO_FACE_THRESHOLD = 10
     MULTIPLE_FACES_THRESHOLD = 5
     LOOKING_AWAY_THRESHOLD = 4
@@ -31,13 +46,14 @@ class ProctoringConfig:
     GAZE_THRESHOLD = 0.7
 
 # --- AI Model Initialization ---
+# (This section remains the same)
 print("🔬 Initializing AI models and CV tools...")
 yolo_model = YOLO(ProctoringConfig.YOLO_MODEL_PATH)
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(max_num_faces=2, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 print("✅ Models and tools initialized successfully.")
 
-# --- Helper Functions ---
+# --- Helper Functions (remain the same) ---
 def base64_to_image(base64_string: str) -> np.ndarray | None:
     try:
         if ',' not in base64_string: return None
@@ -48,6 +64,7 @@ def base64_to_image(base64_string: str) -> np.ndarray | None:
     except Exception: return None
 
 def calculate_ear(eye_landmarks):
+    # (Function remains the same)
     p1 = np.linalg.norm(np.array([eye_landmarks[1].x, eye_landmarks[1].y]) - np.array([eye_landmarks[15].x, eye_landmarks[15].y]))
     p2 = np.linalg.norm(np.array([eye_landmarks[2].x, eye_landmarks[2].y]) - np.array([eye_landmarks[14].x, eye_landmarks[14].y]))
     p3 = np.linalg.norm(np.array([eye_landmarks[3].x, eye_landmarks[3].y]) - np.array([eye_landmarks[13].x, eye_landmarks[13].y]))
@@ -59,25 +76,49 @@ def calculate_ear(eye_landmarks):
     if horizontal_dist == 0: return 0.3
     return vertical_dist / horizontal_dist
 
+
 # --- The Core Proctoring Logic ---
 class ProctoringSession:
     def __init__(self, config):
         self.config = config
+        # --- NEW: Unique ID for each session ---
+        self.session_id = str(uuid.uuid4())
+        print(f"🎉 New proctoring session started: {self.session_id}")
+        
         self.frame_count = 0
         self.last_alert_times = {}
         self.violation_start_times = {}
+        # (Landmark indices remain the same)
         self.LEFT_EYE_INDICES = [362, 382, 381, 380, 373, 374, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
         self.RIGHT_EYE_INDICES = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
         self.LEFT_PUPIL_INDEX = 473
         self.RIGHT_PUPIL_INDEX = 468
     
-    def send_alert(self, event_type, message):
+    # --- MODIFIED: The send_alert function now logs to the database ---
+    def send_alert(self, event_type, message, metadata=None):
         current_time = time.time()
         if current_time - self.last_alert_times.get(event_type, 0) > self.config.ALERT_COOLDOWN:
             print(f"🚨 ALERT: {message}")
             socketio.emit('proctoring_alert', {'message': message, 'type': event_type})
             self.last_alert_times[event_type] = current_time
 
+            # --- NEW: Database Logging Logic ---
+            if client:
+                event_document = {
+                    "sessionId": self.session_id,
+                    "candidateName": "Test Candidate", # Placeholder for now
+                    "timestamp": datetime.utcnow(),
+                    "eventType": event_type,
+                    "message": message,
+                    "metadata": metadata or {} # Store extra data if provided
+                }
+                try:
+                    events_collection.insert_one(event_document)
+                    print(f"📝 Event '{event_type}' logged to database.")
+                except Exception as e:
+                    print(f"❌ Error logging event to database: {e}")
+
+    # (process_frame and other analysis functions remain the same logic, but we update their calls to send_alert)
     def process_frame(self, frame: np.ndarray):
         if self.frame_count % 5 == 0: self.analyze_objects(frame)
         self.frame_count += 1
@@ -98,9 +139,12 @@ class ProctoringSession:
         results = yolo_model(frame, verbose=False, conf=self.config.YOLO_CONFIDENCE_THRESHOLD)
         suspicious_items = {results[0].names[int(cls)] for cls in results[0].boxes.cls}.intersection(self.config.UNAUTHORIZED_OBJECTS)
         if suspicious_items:
-            self.send_alert("object_detection", f"Unauthorized object(s) detected: {', '.join(suspicious_items)}")
+            # --- MODIFIED: Pass metadata ---
+            items_list = list(suspicious_items)
+            self.send_alert("object_detection", f"Unauthorized object(s) detected: {', '.join(items_list)}", metadata={"detectedItems": items_list})
 
     def analyze_face_presence(self, num_faces):
+        # (This function's logic is fine, no metadata needed here)
         for event_type, is_violating, message, threshold in [
             ("no_face", num_faces == 0, "Candidate not visible.", self.config.NO_FACE_THRESHOLD),
             ("multiple_faces", num_faces > 1, "Multiple faces detected.", self.config.MULTIPLE_FACES_THRESHOLD)
@@ -115,7 +159,9 @@ class ProctoringSession:
         is_violating = avg_ear < self.config.EAR_THRESHOLD
         if is_violating:
             if "drowsiness" not in self.violation_start_times: self.violation_start_times["drowsiness"] = time.time()
-            if time.time() - self.violation_start_times["drowsiness"] > self.config.DROWSINESS_THRESHOLD: self.send_alert("drowsiness", "Drowsiness detected (eyes closed).")
+            if time.time() - self.violation_start_times["drowsiness"] > self.config.DROWSINESS_THRESHOLD:
+                # --- MODIFIED: Pass metadata ---
+                self.send_alert("drowsiness", "Drowsiness detected (eyes closed).", metadata={"ear": round(avg_ear, 3)})
         elif "drowsiness" in self.violation_start_times: del self.violation_start_times["drowsiness"]
 
     def analyze_gaze(self, landmarks):
@@ -125,10 +171,13 @@ class ProctoringSession:
         is_violating = gaze_ratio < (1 - self.config.GAZE_THRESHOLD) or gaze_ratio > self.config.GAZE_THRESHOLD
         if is_violating:
             if "gaze_off_screen" not in self.violation_start_times: self.violation_start_times["gaze_off_screen"] = time.time()
-            if time.time() - self.violation_start_times["gaze_off_screen"] > self.config.GAZE_OFF_SCREEN_THRESHOLD: self.send_alert("gaze_off_screen", "Candidate gaze is off-screen.")
+            if time.time() - self.violation_start_times["gaze_off_screen"] > self.config.GAZE_OFF_SCREEN_THRESHOLD:
+                # --- MODIFIED: Pass metadata ---
+                self.send_alert("gaze_off_screen", "Candidate gaze is off-screen.", metadata={"gazeRatio": round(gaze_ratio, 3)})
         elif "gaze_off_screen" in self.violation_start_times: del self.violation_start_times["gaze_off_screen"]
 
     def analyze_focus(self, frame: np.ndarray, landmarks):
+        # (This function is more complex, so we just show the relevant change)
         img_h, img_w, _ = frame.shape
         face_2d = np.array([(landmarks.landmark[i].x * img_w, landmarks.landmark[i].y * img_h) for i in [1, 199, 234, 454, 57, 287]], dtype=np.float64)
         model_points = np.array([(0.0, 0.0, 0.0), (0.0, -330.0, -65.0), (-225.0, 170.0, -135.0), (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)])
@@ -141,13 +190,17 @@ class ProctoringSession:
         is_violating = abs(yaw) > self.config.LOOKING_AWAY_YAW_THRESHOLD
         if is_violating:
             if "focus_lost" not in self.violation_start_times: self.violation_start_times["focus_lost"] = time.time()
-            if time.time() - self.violation_start_times["focus_lost"] > self.config.LOOKING_AWAY_THRESHOLD: self.send_alert("focus_lost", f"Candidate is looking away (Head Yaw: {int(yaw)}°).")
+            if time.time() - self.violation_start_times["focus_lost"] > self.config.LOOKING_AWAY_THRESHOLD:
+                # --- MODIFIED: Pass metadata ---
+                self.send_alert("focus_lost", f"Candidate is looking away (Head Yaw: {int(yaw)}°).", metadata={"yaw": int(yaw)})
         elif "focus_lost" in self.violation_start_times: del self.violation_start_times["focus_lost"]
+
 
 # --- WebSocket Handlers ---
 current_session = None
 @socketio.on('connect')
-def handle_connect(): global current_session; current_session = ProctoringSession(ProctoringConfig); print('✅ Client connected')
+def handle_connect(): global current_session; current_session = ProctoringSession(ProctoringConfig);
+
 @socketio.on('disconnect')
 def handle_disconnect(): global current_session; current_session = None; print('❌ Client disconnected')
 
@@ -161,6 +214,7 @@ def handle_video_frame(data):
 def handle_audio_event(data):
     if current_session:
         current_session.send_alert("audio_detection", data.get('message', 'Significant audio detected.'))
+
 
 # --- Main Execution ---
 if __name__ == '__main__':
