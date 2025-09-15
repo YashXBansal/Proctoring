@@ -1,0 +1,59 @@
+# =================================================================
+# Python - Backend
+# =================================================================
+
+# Virtual environment folder. Never commit this.
+backend/venv/
+
+# Python cache files
+backend/__pycache__/
+*.pyc
+
+# Environment variables file. CRITICAL for security - contains your database password.
+backend/.env
+.env
+
+# Generated files like the final PDF report
+backend/report.pdf
+
+
+# =================================================================
+# Node / Vite - Frontend
+# =================================================================
+
+# Dependencies folder. This is huge and can be reinstalled with 'npm install'.
+frontend/node_modules/
+
+# Production build output folder
+frontend/dist/
+
+# Vite specific cache directory
+frontend/.vite/
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment variables for the frontend
+frontend/.env.local
+frontend/.env.*.local
+
+
+# =================================================================
+# IDE & Editor specific folders
+# =================================================================
+.vscode/
+.idea/
+
+
+# =================================================================
+# OS specific files
+# =================================================================
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
