@@ -22,9 +22,15 @@ load_dotenv()
 app = Flask(__name__)
 
 # --- Deployment Change: Update CORS to allow your frontend URL ---
-frontend_url = "https://proctoring-beryl.vercel.app"
-CORS(app, resources={r"/*": {"origins": [frontend_url, "http://localhost:5173"]}})
-socketio = SocketIO(app, cors_allowed_origins=[frontend_url, "http://localhost:5173"], async_mode='eventlet')
+# backend/app.py
+
+# --- Deployment Change: Update CORS to allow your frontend URL ---
+allowed_origins = [
+    "https://proctoring-beryl.vercel.app",  # Your deployed frontend
+    "http://localhost:5173"               # Your local frontend for testing
+]
+CORS(app, resources={r"/*": {"origins": allowed_origins}})
+socketio = SocketIO(app, cors_allowed_origins=allowed_origins, async_mode='eventlet')
 
 try:
     mongo_uri = os.getenv('MONGO_URI')
