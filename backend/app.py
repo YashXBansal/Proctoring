@@ -45,7 +45,7 @@ except Exception as e:
 class ProctoringConfig:
     NO_FACE_THRESHOLD = 10; MULTIPLE_FACES_THRESHOLD = 5; LOOKING_AWAY_THRESHOLD = 4
     GAZE_OFF_SCREEN_THRESHOLD = 3; DROWSINESS_THRESHOLD = 3; ALERT_COOLDOWN = 5
-    YOLO_MODEL_PATH = 'yolov8m.pt'; YOLO_CONFIDENCE_THRESHOLD = 0.45
+    YOLO_MODEL_PATH = 'yolov8n.pt'; YOLO_CONFIDENCE_THRESHOLD = 0.45
     UNAUTHORIZED_OBJECTS = {'cell phone', 'book', 'laptop', 'mouse', 'remote', 'keyboard', 'tv'}
     EAR_THRESHOLD = 0.21; LOOKING_AWAY_YAW_THRESHOLD = 25; GAZE_THRESHOLD = 0.7
 print("🔬 Initializing AI models and CV tools...")
